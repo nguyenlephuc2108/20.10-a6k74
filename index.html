@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌷</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Three.js & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background-color: #030014;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            color: #fff;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #webgl-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        /* Glassmorphism Button Styling */
+        .glass-pill {
+            background: rgba(255, 255, 255, 0.07);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(244, 114, 182, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(236, 72, 153, 0.25),
+                        inset 0 0 12px rgba(255, 255, 255, 0.15);
+        }
+
+        .glass-pill:hover {
+            background: rgba(236, 72, 153, 0.2);
+            border-color: rgba(244, 114, 182, 0.6);
+            box-shadow: 0 8px 32px 0 rgba(236, 72, 153, 0.45),
+                        0 0 20px rgba(244, 114, 182, 0.4);
+        }
+
+        /* Music Equalizer Animation */
+        .eq-bar {
+            width: 3px;
+            background: linear-gradient(to top, #ec4899, #f472b6, #38bdf8);
+            border-radius: 3px;
+            animation: eqPulse 1.2s ease-in-out infinite alternate;
+        }
+
+        .eq-bar:nth-child(1) { height: 12px; animation-delay: 0.1s; }
+        .eq-bar:nth-child(2) { height: 20px; animation-delay: 0.4s; }
+        .eq-bar:nth-child(3) { height: 14px; animation-delay: 0.2s; }
+        .eq-bar:nth-child(4) { height: 22px; animation-delay: 0.5s; }
+
+        .paused .eq-bar {
+            height: 4px !important;
+            animation: none !important;
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        @keyframes eqPulse {
+            0% { transform: scaleY(0.3); }
+            100% { transform: scaleY(1.1); }
+        }
+
+        @keyframes spinSlow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .animate-spin-slow {
+            animation: spinSlow 8s linear infinite;
+        }
+    </style>
+</head>
+<body class="relative min-h-screen w-full overflow-hidden">
+
+    <!-- WebGL Canvas Container -->
+    <div id="webgl-container"></div>
+
+    <!-- Single Music Toggle Button (Glassmorphism) -->
+    <header class="fixed top-6 right-6 z-20">
+        <button id="music-btn" class="glass-pill px-5 py-3 rounded-full flex items-center gap-3.5 transition-all duration-300 hover:scale-105 active:scale-95 group cursor-pointer">
+            <div id="disc-icon" class="relative w-7 h-7 rounded-full border border-pink-400/80 flex items-center justify-center">
+                <i class="fas fa-compact-disc text-pink-300 text-base"></i>
+            </div>
+
+            <div id="eq-container" class="flex items-center gap-1 h-6 paused">
+                <div class="eq-bar"></div>
+                <div class="eq-bar"></div>
+                <div class="eq-bar"></div>
+                <div class="eq-bar"></div>
+            </div>
+
+            <span class="text-xs font-semibold tracking-wider uppercase text-pink-100 pl-1">
+                
+            </span>
+        </button>
+    </header>
+
+    <!-- Background Audio Element -->
+    <audio id="bg-audio" loop preload="auto">
+        <source src="https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=lofi-study-112191.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+        // --- CONSTANTS ---
+        const TOTAL_IMAGES = 19;
+        const IMAGE_PREFIX = './image/';
+
+        // Fallback images from Unsplash if local images are missing
+        const fallbackImages = Array.from({ length: TOTAL_IMAGES }, (_, i) => 
+            `https://images.unsplash.com/photo-${1500000000000 + (i * 123456) % 99999999}?auto=format&fit=crop&w=400&q=80`
+        );
+
+        // --- THREE.JS GLOBALS ---
+        let scene, camera, renderer, controls;
+        let planetGroup, mainPlanet, atmosphereGlow;
+        let starPoints, nebulaPoints, textCylinder;
+        const orbitGroups = [];
+        const photoMeshes = [];
+
+        // 3 Layer Orbit Ring Configurations
+        const ringConfigs = [
+            { count: 6, radius: 16, tiltX: 0.3,  tiltZ: -0.2, speed: 0.003, scale: 0.95 },
+            { count: 6, radius: 22, tiltX: -0.4, tiltZ: 0.35, speed: -0.0022, scale: 1.05 },
+            { count: 7, radius: 28, tiltX: 0.5,  tiltZ: -0.15, speed: 0.0018, scale: 1.15 }
+        ];
+
+        window.onload = function () {
+            initScene();
+            createSpaceBackground();
+            createSharpStars();
+            createCentralPlanet();
+            createOrbitRings();
+            createTextRibbon();
+            initMusicControl();
+
+            animate(0);
+
+            window.addEventListener('resize', onWindowResize, false);
+        };
+
+        // --- INITIALIZE SCENE & CAMERA ---
+        function initScene() {
+            const container = document.getElementById('webgl-container');
+
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x030014, 0.006);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 16, 48);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            container.appendChild(renderer.domElement);
+
+            // Orbit Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxDistance = 90;
+            controls.minDistance = 15;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.4;
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            const centerLight = new THREE.PointLight(0xf472b6, 3.5, 70);
+            centerLight.position.set(0, 0, 0);
+            scene.add(centerLight);
+
+            const dirLight1 = new THREE.DirectionalLight(0x38bdf8, 1.2);
+            dirLight1.position.set(30, 40, 20);
+            scene.add(dirLight1);
+        }
+
+        // --- DEEP NEBULA BACKGROUND ---
+        function createSpaceBackground() {
+            const count = 800;
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+
+            const colorPink = new THREE.Color(0xec4899);
+            const colorPurple = new THREE.Color(0x7c3aed);
+            const colorCyan = new THREE.Color(0x0284c7);
+
+            for (let i = 0; i < count; i++) {
+                const r = 25 + Math.random() * 55;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+
+                positions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = (r * Math.sin(phi) * Math.sin(theta)) * 0.4;
+                positions[i * 3 + 2] = r * Math.cos(phi);
+
+                let c = colorPink;
+                const rand = Math.random();
+                if (rand > 0.5) c = colorPurple;
+                if (rand > 0.8) c = colorCyan;
+
+                colors[i * 3]     = c.r;
+                colors[i * 3 + 1] = c.g;
+                colors[i * 3 + 2] = c.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Soft glow particle canvas texture
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+            grad.addColorStop(0.5, 'rgba(236,72,153,0.4)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 32, 32);
+
+            const texture = new THREE.CanvasTexture(canvas);
+
+            const material = new THREE.PointsMaterial({
+                size: 2.2,
+                vertexColors: true,
+                map: texture,
+                transparent: true,
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            nebulaPoints = new THREE.Points(geometry, material);
+            scene.add(nebulaPoints);
+        }
+
+        // --- SHARP & OPTIMIZED TWINKLING STARS ---
+        function createSharpStars() {
+            const count = 1500; // Moderate count for zero lag & maximum sharpness
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+
+            const starColors = [
+                new THREE.Color(0xffffff),
+                new THREE.Color(0xfbcfe8),
+                new THREE.Color(0xbae6fd),
+                new THREE.Color(0xfef08a)
+            ];
+
+            for (let i = 0; i < count; i++) {
+                const r = 90 + Math.random() * 180;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+
+                positions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                positions[i * 3 + 2] = r * Math.cos(phi);
+
+                const c = starColors[Math.floor(Math.random() * starColors.length)];
+                colors[i * 3]     = c.r;
+                colors[i * 3 + 1] = c.g;
+                colors[i * 3 + 2] = c.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Sharp circular star texture
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(8, 8, 6, 0, Math.PI * 2);
+            ctx.fill();
+
+            const texture = new THREE.CanvasTexture(canvas);
+
+            const material = new THREE.PointsMaterial({
+                size: 1.4,
+                vertexColors: true,
+                map: texture,
+                transparent: true,
+                opacity: 0.9,
+                alphaTest: 0.1,
+                depthWrite: false
+            });
+
+            starPoints = new THREE.Points(geometry, material);
+            scene.add(starPoints);
+        }
+
+        // --- CENTRAL NEON PINK PLANET WITH GLOW ---
+        function createCentralPlanet() {
+            planetGroup = new THREE.Group();
+            scene.add(planetGroup);
+
+            // Procedural surface texture for core planet
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+
+            const grad = ctx.createLinearGradient(0, 0, 512, 512);
+            grad.addColorStop(0, '#be185d');
+            grad.addColorStop(0.5, '#ec4899');
+            grad.addColorStop(1, '#831843');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 512, 512);
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+            for (let i = 0; i < 25; i++) {
+                ctx.beginPath();
+                ctx.arc(Math.random() * 512, Math.random() * 512, Math.random() * 80 + 20, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            const planetTex = new THREE.CanvasTexture(canvas);
+
+            // Core sphere
+            const coreGeo = new THREE.SphereGeometry(6, 48, 48);
+            const coreMat = new THREE.MeshStandardMaterial({
+                map: planetTex,
+                roughness: 0.25,
+                metalness: 0.2,
+                emissive: 0xdb2777,
+                emissiveIntensity: 0.65
+            });
+
+            mainPlanet = new THREE.Mesh(coreGeo, coreMat);
+            planetGroup.add(mainPlanet);
+
+            // Outer Glow Atmosphere
+            const glowGeo = new THREE.SphereGeometry(6.6, 32, 32);
+            const glowMat = new THREE.MeshBasicMaterial({
+                color: 0xf472b6,
+                transparent: true,
+                opacity: 0.25,
+                side: THREE.BackSide,
+                blending: THREE.AdditiveBlending
+            });
+
+            atmosphereGlow = new THREE.Mesh(glowGeo, glowMat);
+            planetGroup.add(atmosphereGlow);
+        }
+
+        // --- 3 ORBIT RINGS & 30 PHOTO CARDS ---
+        function createOrbitRings() {
+            const textureLoader = new THREE.TextureLoader();
+            let photoCounter = 1;
+
+            ringConfigs.forEach((config, ringIdx) => {
+                const ringGroup = new THREE.Group();
+                ringGroup.rotation.x = config.tiltX;
+                ringGroup.rotation.z = config.tiltZ;
+                scene.add(ringGroup);
+                orbitGroups.push({ group: ringGroup, speed: config.speed });
+
+                // Glowing Ring Line
+                const ringGeo = new THREE.RingGeometry(config.radius - 0.08, config.radius + 0.08, 96);
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: ringIdx % 2 === 0 ? 0xf472b6 : 0x38bdf8,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.35,
+                    blending: THREE.AdditiveBlending
+                });
+                const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+                ringMesh.rotation.x = Math.PI / 2;
+                ringGroup.add(ringMesh);
+
+                // Add 10 Photos per ring (Total 30)
+                for (let i = 0; i < config.count; i++) {
+                    const imgNum = photoCounter;
+                    const angle = (i / config.count) * Math.PI * 2;
+                    const photoPath = `${IMAGE_PREFIX}${imgNum}.jpg`;
+
+                    const cardW = 2.4 * config.scale;
+                    const cardH = 3.2 * config.scale;
+
+                    const frameMat = new THREE.MeshStandardMaterial({
+                        color: 0xffffff,
+                        metalness: 0.8,
+                        roughness: 0.2,
+                        emissive: ringIdx % 2 === 0 ? 0xec4899 : 0x0284c7,
+                        emissiveIntensity: 0.25
+                    });
+
+                    // Load photo texture with fallback
+                    const photoTex = textureLoader.load(
+                        photoPath,
+                        undefined,
+                        undefined,
+                        () => {
+                            // Fallback if local image fails
+                            textureLoader.load(fallbackImages[imgNum - 1], (fb) => {
+                                cardMesh.material[4].map = fb;
+                                cardMesh.material[4].needsUpdate = true;
+                            });
+                        }
+                    );
+
+                    const photoMat = new THREE.MeshBasicMaterial({
+                        map: photoTex,
+                        side: THREE.DoubleSide
+                    });
+
+                    const boxGeo = new THREE.BoxGeometry(cardW, cardH, 0.06);
+                    const materials = [frameMat, frameMat, frameMat, frameMat, photoMat, photoMat];
+                    const cardMesh = new THREE.Mesh(boxGeo, materials);
+
+                    const x = Math.cos(angle) * config.radius;
+                    const z = Math.sin(angle) * config.radius;
+
+                    cardMesh.position.set(x, 0, z);
+                    cardMesh.lookAt(0, 0, 0);
+                    cardMesh.rotation.y += Math.PI;
+
+                    cardMesh.userData = {
+                        baseY: 0,
+                        angle: angle,
+                        radius: config.radius,
+                        ringIdx: ringIdx
+                    };
+
+                    ringGroup.add(cardMesh);
+                    photoMeshes.push(cardMesh);
+
+                    photoCounter++;
+                }
+            });
+        }
+
+        // --- DASHED RIBBON WITH TEXT ---
+        function createTextRibbon() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = 'rgba(0,0,0,0)';
+            ctx.fillRect(0, 0, 1024, 128);
+
+            ctx.font = '700 42px "Plus Jakarta Sans", sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const text = "GỬI TẶNG NHỮNG ĐÓA HỒNG 11/6 NGÀY 20/10 🌷";
+            ctx.fillText(text, 512, 64);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.repeat.set(2, 1);
+
+            const cylinderGeo = new THREE.CylinderGeometry(9.5, 9.5, 1.4, 64, 1, true);
+            const cylinderMat = new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 0.8,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending
+            });
+
+            textCylinder = new THREE.Mesh(cylinderGeo, cylinderMat);
+            textCylinder.rotation.x = 0.4;
+            textCylinder.rotation.z = -0.2;
+            scene.add(textCylinder);
+        }
+
+        // --- MUSIC TOGGLE HANDLER ---
+        function initMusicControl() {
+            const musicBtn = document.getElementById('music-btn');
+            const audio = document.getElementById('bg-audio');
+            const eqContainer = document.getElementById('eq-container');
+            const discIcon = document.getElementById('disc-icon');
+            let isPlaying = false;
+
+            musicBtn.addEventListener('click', () => {
+                if (!isPlaying) {
+                    audio.play().then(() => {
+                        isPlaying = true;
+                        eqContainer.classList.remove('paused');
+                        discIcon.classList.add('animate-spin-slow');
+                    }).catch(e => console.log("Audio play blocked: ", e));
+                } else {
+                    audio.pause();
+                    isPlaying = false;
+                    eqContainer.classList.add('paused');
+                    discIcon.classList.remove('animate-spin-slow');
+                }
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- ANIMATION & RENDER LOOP ---
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            const seconds = time * 0.001;
+
+            // 1. Slow cosmic background rotations
+            if (nebulaPoints) nebulaPoints.rotation.y = seconds * 0.015;
+            if (starPoints) starPoints.rotation.y = seconds * 0.008;
+
+            // 2. Planet rotation & pulse
+            if (mainPlanet) mainPlanet.rotation.y = seconds * 0.15;
+            if (atmosphereGlow) {
+                const scale = 1 + Math.sin(seconds * 2) * 0.02;
+                atmosphereGlow.scale.set(scale, scale, scale);
+            }
+
+            // 3. Text ribbon scrolling
+            if (textCylinder && textCylinder.material.map) {
+                textCylinder.material.map.offset.x = seconds * 0.06;
+            }
+
+            // 4. Orbit rings rotation
+            orbitGroups.forEach(item => {
+                item.group.rotation.y += item.speed;
+            });
+
+            // 5. Photo card floating wave effect
+            photoMeshes.forEach((card, i) => {
+                card.position.y = Math.sin(seconds * 2 + i) * 0.2;
+            });
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
